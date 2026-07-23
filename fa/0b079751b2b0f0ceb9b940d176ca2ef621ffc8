@@ -1,0 +1,21 @@
+README.md
+  s_d7346a959c2f1c::t_e54d7f73c4f619 3,5,7,13
+AGENTS.md
+  s_d7346a959c2f1c::t_0c5313a21c4247 1-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "fa0b079751b2b0f0ceb9b940d176ca2ef621ffc8",
+  "prompts": {},
+  "sessions": {
+    "s_d7346a959c2f1c": {
+      "agent_id": {
+        "tool": "windsurf",
+        "id": "dazzling-sweater",
+        "model": "unknown"
+      },
+      "human_author": "Karthik Padmanabhan <karthik@Karthiks-MacBook-Pro.local>"
+    }
+  }
+}
