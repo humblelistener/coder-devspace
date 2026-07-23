@@ -271,7 +271,7 @@ def hcl_str(value) -> str:
     return f'"{s}"'
 
 
-def generate_configmaps(services: list[Service], namespace: str) -> tuple[list[str], dict]:
+def generate_configmaps(services: list[Service]) -> tuple[list[str], dict]:
     """Generate Kubernetes ConfigMaps for bind-mounted compose volumes."""
     configmap_tf = []
     configmap_names = {}
@@ -296,7 +296,7 @@ def generate_configmaps(services: list[Service], namespace: str) -> tuple[list[s
             configmap_tf.append(f'resource "kubernetes_config_map" "{cm_name}" {{')
             configmap_tf.append('  metadata {')
             configmap_tf.append(f'    name      = {hcl_str(cm_name)}')
-            configmap_tf.append(f'    namespace = {hcl_str(namespace)}')
+            configmap_tf.append(f'    namespace = kubernetes_namespace.workspace.metadata[0].name')
             configmap_tf.append('  }')
             configmap_tf.append('  data = {')
             for k, v in files.items():
@@ -307,7 +307,7 @@ def generate_configmaps(services: list[Service], namespace: str) -> tuple[list[s
     return configmap_tf, configmap_names
 
 
-def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
+def generate_terraform(services: list[Service], out_dir: Path, namespace_prefix: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     root = services[-1]
 
@@ -325,11 +325,23 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
     main_tf.append('  }')
     main_tf.append('}')
     main_tf.append('')
+    main_tf.append('provider "coder" {}')
+    main_tf.append('')
+    main_tf.append('provider "kubernetes" {')
+    main_tf.append('  config_path = var.use_kubeconfig ? "~/.kube/config" : null')
+    main_tf.append('}')
+    main_tf.append('')
     main_tf.append('data "coder_workspace" "me" {}')
+    main_tf.append('')
+    main_tf.append('resource "kubernetes_namespace" "workspace" {')
+    main_tf.append('  metadata {')
+    main_tf.append(f'    name = substr(lower(replace("{namespace_prefix}-${{data.coder_workspace.me.name}}", " ", "-")), 0, 63)')
+    main_tf.append('  }')
+    main_tf.append('}')
     main_tf.append('')
 
     # ConfigMaps for bind mounts.
-    configmap_tf, configmap_names = generate_configmaps(services, namespace)
+    configmap_tf, configmap_names = generate_configmaps(services)
     main_tf.extend(configmap_tf)
 
     # PVCs for named volumes.
@@ -339,9 +351,10 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
                 continue
             pvc_name = f"{svc.name}-{vol['source']}".replace("_", "-")
             main_tf.append(f'resource "kubernetes_persistent_volume_claim" "{pvc_name}" {{')
+            main_tf.append('  wait_until_bound = false')
             main_tf.append('  metadata {')
             main_tf.append(f'    name      = "coder-${{data.coder_workspace.me.id}}-{pvc_name}"')
-            main_tf.append(f'    namespace = {hcl_str(namespace)}')
+            main_tf.append(f'    namespace = kubernetes_namespace.workspace.metadata[0].name')
             main_tf.append('  }')
             main_tf.append('  spec {')
             main_tf.append('    access_modes = ["ReadWriteOnce"]')
@@ -359,6 +372,7 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
     main_tf.append('  os   = "linux"')
     main_tf.append('  arch = "amd64"')
     main_tf.append('  auth = "token"')
+    main_tf.append('  connection_timeout = 1800')
     main_tf.append('  startup_script = <<-EOT')
     main_tf.append('    #!/bin/sh')
     main_tf.append('    set -e')
@@ -392,14 +406,16 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
             main_tf.append(f'  url          = {hcl_str(f"http://localhost:{port_num}")}')
             main_tf.append('  icon         = "/icon/apps.svg"')
             main_tf.append('  share        = "owner"')
+            main_tf.append('  subdomain    = true')
             main_tf.append('}')
             main_tf.append('')
 
     # PVC for workspace home.
     main_tf.append('resource "kubernetes_persistent_volume_claim" "home" {')
+    main_tf.append('  wait_until_bound = false')
     main_tf.append('  metadata {')
     main_tf.append('    name      = "coder-${data.coder_workspace.me.id}-home"')
-    main_tf.append(f'    namespace = {hcl_str(namespace)}')
+    main_tf.append(f'    namespace = kubernetes_namespace.workspace.metadata[0].name')
     main_tf.append('  }')
     main_tf.append('  spec {')
     main_tf.append('    access_modes = ["ReadWriteOnce"]')
@@ -419,16 +435,17 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
         is_root = svc.name == root.name
 
         main_tf.append(f'resource "kubernetes_deployment" "{dep_name}" {{')
+        main_tf.append('  wait_for_rollout = false')
         main_tf.append('  metadata {')
         main_tf.append(f'    name      = "coder-${{data.coder_workspace.me.id}}-{dep_name}"')
-        main_tf.append(f'    namespace = {hcl_str(namespace)}')
+        main_tf.append(f'    namespace = kubernetes_namespace.workspace.metadata[0].name')
         main_tf.append('    labels = {')
         main_tf.append(f'      "app" = {hcl_str(dep_name)}')
         main_tf.append('      "coder.workspace_id" = data.coder_workspace.me.id')
         main_tf.append('    }')
         main_tf.append('  }')
         main_tf.append('  spec {')
-        main_tf.append('    replicas = 1')
+        main_tf.append('    replicas = data.coder_workspace.me.start_count')
         main_tf.append('    selector {')
         main_tf.append('      match_labels = {')
         main_tf.append(f'        "app" = {hcl_str(dep_name)}')
@@ -441,6 +458,19 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
         main_tf.append('        }')
         main_tf.append('      }')
         main_tf.append('      spec {')
+        main_tf.append('        affinity {')
+        main_tf.append('          node_affinity {')
+        main_tf.append('            required_during_scheduling_ignored_during_execution {')
+        main_tf.append('              node_selector_term {')
+        main_tf.append('                match_expressions {')
+        main_tf.append('                  key      = "kubernetes.io/os"')
+        main_tf.append('                  operator = "In"')
+        main_tf.append('                  values   = ["linux"]')
+        main_tf.append('                }')
+        main_tf.append('              }')
+        main_tf.append('            }')
+        main_tf.append('          }')
+        main_tf.append('        }')
 
         # Volumes for PVC and ConfigMaps.
         for vol in svc.volumes:
@@ -473,6 +503,16 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
         main_tf.append('        container {')
         main_tf.append(f'          name  = {hcl_str(dep_name)}')
         main_tf.append(f'          image = {hcl_str(image)}')
+        main_tf.append('          resources {')
+        main_tf.append('            requests = {')
+        main_tf.append('              cpu    = "250m"')
+        main_tf.append('              memory = "512Mi"')
+        main_tf.append('            }')
+        main_tf.append('            limits = {')
+        main_tf.append('              cpu    = "2"')
+        main_tf.append('              memory = "2Gi"')
+        main_tf.append('            }')
+        main_tf.append('          }')
 
         if is_root:
             main_tf.append('          command = ["sh", "-c", coder_agent.main.init_script]')
@@ -532,7 +572,7 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
             main_tf.append(f'resource "kubernetes_service" "{dep_name}" {{')
             main_tf.append('  metadata {')
             main_tf.append(f'    name      = {hcl_str(dep_name)}')
-            main_tf.append(f'    namespace = {hcl_str(namespace)}')
+            main_tf.append(f'    namespace = kubernetes_namespace.workspace.metadata[0].name')
             main_tf.append('  }')
             main_tf.append('  spec {')
             main_tf.append('    selector = {')
@@ -552,10 +592,10 @@ def generate_terraform(services: list[Service], out_dir: Path, namespace: str):
     (out_dir / "main.tf").write_text("\n".join(main_tf))
 
     vars_tf = [
-        'variable "namespace" {',
-        '  type        = string',
-        f'  default     = {hcl_str(namespace)}',
-        '  description = "Kubernetes namespace for the workspace"',
+        'variable "use_kubeconfig" {',
+        '  type        = bool',
+        '  default     = false',
+        '  description = "Use host kubeconfig? Set false when Coder runs in-cluster (the CDE default)."',
         '}',
         '',
     ]
@@ -585,7 +625,7 @@ def main():
     parser.add_argument("source", help="Git URL or local path to the root repo")
     parser.add_argument("--out", required=True, help="Output directory for the generated template")
     parser.add_argument("--branch", default="main", help="Git branch to use")
-    parser.add_argument("--namespace", default="coder-workspaces", help="Kubernetes namespace")
+    parser.add_argument("--namespace-prefix", default="coder", help="Prefix for the per-workspace Kubernetes namespace (<prefix>-<workspace-name>)")
     parser.add_argument("--override", action="append", default=[],
                         help="Override a dependency source, e.g. --override postgres=/path/to/postgres")
     parser.add_argument("--cache", default=None, help="Cache directory for cloned repos")
@@ -608,7 +648,7 @@ def main():
         print(f"  - {svc.name}: {svc.repo_url}")
 
     print(f"Generating Coder template at: {out_dir}")
-    generate_terraform(services, out_dir, args.namespace)
+    generate_terraform(services, out_dir, args.namespace_prefix)
     print("Done.")
 
 
