@@ -4,6 +4,12 @@ Prototype CLI that reads a devspace-like `devspace.yaml` (and optional `docker-c
 
 ## Install
 
+### With VS Code Dev Containers
+
+Open the repo in VS Code and run **Reopen in Container**. The devcontainer installs Python and `pyyaml` automatically.
+
+### Manual
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -14,6 +20,12 @@ pip install -r requirements.txt
 
 ```bash
 python coder-devspace.py https://github.com/humblelistener/conductor.git --out ./coder-template
+```
+
+Inside the devcontainer the script is executable:
+
+```bash
+./coder-devspace.py https://github.com/humblelistener/conductor.git --out ./coder-template
 ```
 
 The output is a Terraform module ready to be imported as a Coder template.
